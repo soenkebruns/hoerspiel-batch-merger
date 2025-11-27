@@ -383,16 +383,12 @@ class MP3AlbumMergerApp:
             self.check_item_recursive(child, checked)
     
     def merge_selected(self):
-        """Merge selected albums"""
-        # Get selected groups
+        """Merge selected tracks"""
+        # Get selected groups - now allows individual track selection regardless of album checkbox
         selected_groups = []
         
         for group_item in self.tree.get_children():
-            tags = self.tree.item(group_item, "tags")
-            if "checked" not in tags:
-                continue
-            
-            # Get group name
+            # Get group name (works whether album checkbox is checked or not)
             group_name = self.tree.item(group_item, "text").replace("☑ ", "").replace("☐ ", "")
             
             # Get checked files in this group
@@ -413,7 +409,7 @@ class MP3AlbumMergerApp:
                 })
         
         if not selected_groups:
-            messagebox.showinfo("No Selection", "Please select at least one album to merge.")
+            messagebox.showinfo("No Selection", "Please select at least one track to merge.")
             return
         
         # Get output format
