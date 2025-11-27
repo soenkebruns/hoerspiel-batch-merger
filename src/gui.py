@@ -8,9 +8,20 @@ from pathlib import Path
 import threading
 
 from .scanner import scan_folder, group_by_album, group_by_folder, sort_files
-from .merger import check_ffmpeg, merge_mp3_files
+from .merger import check_ffmpeg, merge_mp3_files, get_merged_metadata
 from .chapters import add_chapters_to_mp3
 from .utils import format_duration, sanitize_filename
+
+
+# Bitrate options for the dropdown
+BITRATE_OPTIONS = [
+    ("Original (no re-encoding)", None),
+    ("64 kbps", "64k"),
+    ("128 kbps", "128k"),
+    ("192 kbps", "192k"),
+    ("256 kbps", "256k"),
+    ("320 kbps", "320k"),
+]
 
 
 class MP3AlbumMergerApp:
@@ -23,6 +34,7 @@ class MP3AlbumMergerApp:
         self.all_files = []
         self.groups = {}
         self.grouping_mode = tk.StringVar(value="album")
+        self.selected_bitrate = tk.StringVar(value=BITRATE_OPTIONS[0][0])
         
         self.setup_ui()
         
@@ -66,6 +78,20 @@ class MP3AlbumMergerApp:
             value="folder",
             command=self.regroup_files
         ).pack(side=tk.LEFT, padx=5)
+        
+        # Separator
+        ttk.Separator(mode_frame, orient=tk.VERTICAL).pack(side=tk.LEFT, padx=15, fill=tk.Y)
+        
+        # Bitrate selection
+        ttk.Label(mode_frame, text="Bitrate:").pack(side=tk.LEFT, padx=5)
+        bitrate_combo = ttk.Combobox(
+            mode_frame,
+            textvariable=self.selected_bitrate,
+            values=[opt[0] for opt in BITRATE_OPTIONS],
+            state="readonly",
+            width=25
+        )
+        bitrate_combo.pack(side=tk.LEFT, padx=5)
         
         # Main treeview
         tree_frame = ttk.Frame(self.root, padding="10")
@@ -340,6 +366,9 @@ class MP3AlbumMergerApp:
     
     def do_merge(self, selected_groups):
         """Perform the actual merging"""
+        # Get bitrate value from selection
+        bitrate = self._get_selected_bitrate()
+        
         try:
             for idx, group in enumerate(selected_groups):
                 group_name = group['name']
@@ -352,8 +381,11 @@ class MP3AlbumMergerApp:
                 output_name = sanitize_filename(group_name) + "_merged.mp3"
                 output_path = files[0]['path'].parent / output_name
                 
-                # Merge files
-                merge_mp3_files(files, output_path)
+                # Merge files with selected bitrate
+                merge_mp3_files(files, output_path, bitrate=bitrate)
+                
+                # Get merged metadata
+                metadata = get_merged_metadata(files)
                 
                 # Add chapters
                 chapters_data = []
@@ -371,7 +403,8 @@ class MP3AlbumMergerApp:
                     
                     current_time_ms += duration_ms
                 
-                add_chapters_to_mp3(output_path, chapters_data)
+                # Add chapters and metadata to output file
+                add_chapters_to_mp3(output_path, chapters_data, metadata=metadata)
                 
                 self.status_label.config(text=f"Completed {idx+1}/{len(selected_groups)}")
                 self.root.update()
@@ -382,6 +415,14 @@ class MP3AlbumMergerApp:
         except Exception as e:
             self.status_label.config(text="Error during merge")
             messagebox.showerror("Error", f"Error during merge:\n{str(e)}")
+    
+    def _get_selected_bitrate(self):
+        """Get the bitrate value from the selected option."""
+        selected_label = self.selected_bitrate.get()
+        for label, value in BITRATE_OPTIONS:
+            if label == selected_label:
+                return value
+        return None
     
     def run(self):
         """Start the application"""

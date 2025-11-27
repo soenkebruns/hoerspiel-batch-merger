@@ -11,7 +11,7 @@ def check_ffmpeg():
     """Check if ffmpeg is available in PATH"""
     return shutil.which('ffmpeg') is not None
 
-def merge_mp3_files(file_list, output_path, progress_callback=None):
+def merge_mp3_files(file_list, output_path, progress_callback=None, bitrate=None):
     """
     Merge MP3 files using ffmpeg concat demuxer
     
@@ -19,6 +19,7 @@ def merge_mp3_files(file_list, output_path, progress_callback=None):
         file_list: List of file_info dicts
         output_path: Path for output file
         progress_callback: Optional callback function(percent)
+        bitrate: Optional target bitrate (e.g., '128k', '192k'). If None, uses copy codec.
     """
     if not file_list:
         raise ValueError("No files to merge")
@@ -38,10 +39,15 @@ def merge_mp3_files(file_list, output_path, progress_callback=None):
             '-f', 'concat',
             '-safe', '0',
             '-i', str(concat_file),
-            '-c', 'copy',
-            '-y',  # Overwrite output file
-            str(output_path)
         ]
+        
+        # Add codec options based on bitrate
+        if bitrate:
+            cmd.extend(['-codec:a', 'libmp3lame', '-b:a', bitrate])
+        else:
+            cmd.extend(['-c', 'copy'])
+        
+        cmd.extend(['-y', str(output_path)])  # Overwrite output file
         
         # Execute ffmpeg
         process = subprocess.run(
@@ -60,3 +66,54 @@ def merge_mp3_files(file_list, output_path, progress_callback=None):
     finally:
         # Clean up temp file
         concat_file.unlink(missing_ok=True)
+
+
+def get_merged_metadata(file_list):
+    """
+    Analyze source files to determine merged metadata.
+    
+    Args:
+        file_list: List of file_info dicts with 'artist' and 'album' keys
+        
+    Returns:
+        dict with 'artist', 'album', and 'compilation' keys
+    """
+    if not file_list:
+        return {'artist': 'Unknown Artist', 'album': 'Unknown Album', 'compilation': False}
+    
+    # Collect unique artists and albums (excluding None values)
+    artists = set()
+    albums = set()
+    
+    for file_info in file_list:
+        artist = file_info.get('artist')
+        album = file_info.get('album')
+        if artist:
+            artists.add(artist)
+        if album:
+            albums.add(album)
+    
+    # Determine artist
+    if len(artists) == 0:
+        result_artist = 'Unknown Artist'
+        compilation = False
+    elif len(artists) == 1:
+        result_artist = artists.pop()
+        compilation = False
+    else:
+        result_artist = 'Various Artists'
+        compilation = True
+    
+    # Determine album
+    if len(albums) == 0:
+        result_album = 'Unknown Album'
+    elif len(albums) == 1:
+        result_album = albums.pop()
+    else:
+        result_album = 'Compilation'
+    
+    return {
+        'artist': result_artist,
+        'album': result_album,
+        'compilation': compilation
+    }
