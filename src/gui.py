@@ -6,11 +6,20 @@ import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 from pathlib import Path
 import threading
+import queue
+import io
 
 from .scanner import scan_folder, group_by_album, group_by_folder, sort_files
 from .merger import check_ffmpeg, merge_audio_files, get_merged_metadata
 from .chapters import add_chapters_and_tags
 from .utils import format_duration, sanitize_filename
+
+# Try to import PIL for album art display
+try:
+    from PIL import Image, ImageTk
+    PIL_AVAILABLE = True
+except ImportError:
+    PIL_AVAILABLE = False
 
 
 # Output format options
@@ -50,16 +59,207 @@ BITRATE_OPTIONS = {
     ],
 }
 
+# Common genre options
+GENRE_OPTIONS = [
+    "Audiobook",
+    "Hörspiel",
+    "Podcast",
+    "Classical",
+    "Jazz",
+    "Pop",
+    "Rock",
+    "Electronic",
+    "Soundtrack",
+    "Speech",
+    "Other",
+]
+
 # Lookup dictionaries for format and bitrate values
 FORMAT_LOOKUP = {label: value for label, value in FORMAT_OPTIONS}
 FORMAT_REVERSE_LOOKUP = {value: label for label, value in FORMAT_OPTIONS}
+
+
+class TagEditorDialog(tk.Toplevel):
+    """Dialog for editing tags before merging"""
+    
+    def __init__(self, parent, group_name, metadata, album_art=None):
+        super().__init__(parent)
+        self.title(f"Edit Tags: {group_name}")
+        self.geometry("500x450")
+        self.resizable(False, False)
+        
+        # Make modal
+        self.transient(parent)
+        self.grab_set()
+        
+        # Store result
+        self.result = None
+        self.album_art = album_art
+        self.album_art_image = None  # Keep reference to PhotoImage
+        
+        self._setup_ui(metadata)
+        
+        # Center on parent
+        self.update_idletasks()
+        x = parent.winfo_x() + (parent.winfo_width() - self.winfo_width()) // 2
+        y = parent.winfo_y() + (parent.winfo_height() - self.winfo_height()) // 2
+        self.geometry(f"+{x}+{y}")
+        
+        # Wait for window to close
+        self.protocol("WM_DELETE_WINDOW", self._on_cancel)
+    
+    def _setup_ui(self, metadata):
+        """Setup dialog UI"""
+        main_frame = ttk.Frame(self, padding="10")
+        main_frame.pack(fill=tk.BOTH, expand=True)
+        
+        # Album art and fields frame
+        content_frame = ttk.Frame(main_frame)
+        content_frame.pack(fill=tk.BOTH, expand=True)
+        
+        # Album art frame (left side)
+        art_frame = ttk.LabelFrame(content_frame, text="Album Art", padding="5")
+        art_frame.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 10))
+        
+        # Album art display
+        self.art_label = ttk.Label(art_frame, text="No Cover", width=15, anchor="center")
+        self.art_label.pack(pady=5)
+        self._update_album_art_display()
+        
+        # Album art buttons
+        art_buttons = ttk.Frame(art_frame)
+        art_buttons.pack(fill=tk.X, pady=5)
+        
+        ttk.Button(art_buttons, text="Change", command=self._change_cover, width=8).pack(side=tk.LEFT, padx=2)
+        ttk.Button(art_buttons, text="Remove", command=self._remove_cover, width=8).pack(side=tk.LEFT, padx=2)
+        
+        # Fields frame (right side)
+        fields_frame = ttk.Frame(content_frame)
+        fields_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        
+        # Artist
+        ttk.Label(fields_frame, text="Artist:").grid(row=0, column=0, sticky="w", pady=5)
+        self.artist_var = tk.StringVar(value=metadata.get('artist', ''))
+        ttk.Entry(fields_frame, textvariable=self.artist_var, width=30).grid(row=0, column=1, sticky="ew", pady=5)
+        
+        # Album
+        ttk.Label(fields_frame, text="Album:").grid(row=1, column=0, sticky="w", pady=5)
+        self.album_var = tk.StringVar(value=metadata.get('album', ''))
+        ttk.Entry(fields_frame, textvariable=self.album_var, width=30).grid(row=1, column=1, sticky="ew", pady=5)
+        
+        # Year
+        ttk.Label(fields_frame, text="Year:").grid(row=2, column=0, sticky="w", pady=5)
+        self.year_var = tk.StringVar(value=metadata.get('year', ''))
+        ttk.Entry(fields_frame, textvariable=self.year_var, width=10).grid(row=2, column=1, sticky="w", pady=5)
+        
+        # Genre
+        ttk.Label(fields_frame, text="Genre:").grid(row=3, column=0, sticky="w", pady=5)
+        self.genre_var = tk.StringVar(value=metadata.get('genre', ''))
+        genre_combo = ttk.Combobox(fields_frame, textvariable=self.genre_var, values=GENRE_OPTIONS, width=27)
+        genre_combo.grid(row=3, column=1, sticky="ew", pady=5)
+        
+        # Comment
+        ttk.Label(fields_frame, text="Comment:").grid(row=4, column=0, sticky="nw", pady=5)
+        self.comment_text = tk.Text(fields_frame, height=3, width=30)
+        self.comment_text.grid(row=4, column=1, sticky="ew", pady=5)
+        if metadata.get('comment'):
+            self.comment_text.insert('1.0', metadata['comment'])
+        
+        # Compilation
+        self.compilation_var = tk.BooleanVar(value=metadata.get('compilation', False))
+        ttk.Checkbutton(fields_frame, text="Compilation", variable=self.compilation_var).grid(
+            row=5, column=0, columnspan=2, sticky="w", pady=5
+        )
+        
+        fields_frame.columnconfigure(1, weight=1)
+        
+        # Buttons frame
+        button_frame = ttk.Frame(main_frame)
+        button_frame.pack(fill=tk.X, pady=(10, 0))
+        
+        ttk.Button(button_frame, text="Start Merge", command=self._on_ok).pack(side=tk.RIGHT, padx=5)
+        ttk.Button(button_frame, text="Cancel", command=self._on_cancel).pack(side=tk.RIGHT, padx=5)
+    
+    def _update_album_art_display(self):
+        """Update album art display"""
+        if self.album_art and self.album_art.get('data') and PIL_AVAILABLE:
+            try:
+                # Load image from bytes
+                image_data = io.BytesIO(self.album_art['data'])
+                image = Image.open(image_data)
+                # Resize to fit display (max 100x100)
+                image.thumbnail((100, 100), Image.Resampling.LANCZOS)
+                self.album_art_image = ImageTk.PhotoImage(image)
+                self.art_label.configure(image=self.album_art_image, text="")
+            except Exception:
+                self.art_label.configure(image="", text="[Cover]")
+        else:
+            self.art_label.configure(image="", text="No Cover")
+    
+    def _change_cover(self):
+        """Change album art"""
+        file_path = filedialog.askopenfilename(
+            title="Select Cover Image",
+            filetypes=[
+                ("Image files", "*.jpg *.jpeg *.png"),
+                ("JPEG files", "*.jpg *.jpeg"),
+                ("PNG files", "*.png"),
+                ("All files", "*.*")
+            ]
+        )
+        
+        if file_path:
+            try:
+                with open(file_path, 'rb') as f:
+                    data = f.read()
+                
+                # Determine mime type from file signature (magic bytes)
+                mime = 'image/jpeg'  # Default
+                if data[:8] == b'\x89PNG\r\n\x1a\n':
+                    mime = 'image/png'
+                elif data[:2] in (b'\xff\xd8', b'\xff\xe0', b'\xff\xe1'):
+                    mime = 'image/jpeg'
+                elif data[:4] == b'GIF8':
+                    mime = 'image/gif'
+                
+                self.album_art = {
+                    'data': data,
+                    'mime': mime,
+                    'desc': 'Cover'
+                }
+                self._update_album_art_display()
+            except Exception as e:
+                messagebox.showerror("Error", f"Failed to load image:\n{str(e)}")
+    
+    def _remove_cover(self):
+        """Remove album art"""
+        self.album_art = None
+        self._update_album_art_display()
+    
+    def _on_ok(self):
+        """Handle OK button"""
+        self.result = {
+            'artist': self.artist_var.get(),
+            'album': self.album_var.get(),
+            'year': self.year_var.get(),
+            'genre': self.genre_var.get(),
+            'comment': self.comment_text.get('1.0', 'end-1c'),
+            'compilation': self.compilation_var.get(),
+            'album_art': self.album_art
+        }
+        self.destroy()
+    
+    def _on_cancel(self):
+        """Handle Cancel button"""
+        self.result = None
+        self.destroy()
 
 
 class MP3AlbumMergerApp:
     def __init__(self):
         self.root = tk.Tk()
         self.root.title("Audio Album Merger")
-        self.root.geometry("900x700")
+        self.root.geometry("900x750")
         
         self.selected_folder = None
         self.all_files = []
@@ -67,6 +267,9 @@ class MP3AlbumMergerApp:
         self.grouping_mode = tk.StringVar(value="album")
         self.selected_format = tk.StringVar(value=FORMAT_OPTIONS[0][0])
         self.selected_bitrate = tk.StringVar()
+        
+        # Progress queue for thread-safe updates
+        self.progress_queue = queue.Queue()
         
         self.setup_ui()
         self._update_bitrate_options()  # Initialize bitrate options
@@ -172,6 +375,26 @@ class MP3AlbumMergerApp:
         self.tree.bind("<space>", self.toggle_selection)
         self.tree.bind("<Button-1>", self.on_tree_click)
         
+        # Progress frame (below treeview)
+        progress_frame = ttk.LabelFrame(self.root, text="Progress", padding="10")
+        progress_frame.pack(fill=tk.X, padx=10, pady=5)
+        
+        # Progress info label
+        self.progress_info_label = ttk.Label(progress_frame, text="")
+        self.progress_info_label.pack(fill=tk.X)
+        
+        # Progress bar
+        self.progress_bar = ttk.Progressbar(progress_frame, mode='determinate', length=300)
+        self.progress_bar.pack(fill=tk.X, pady=5)
+        
+        # Progress percentage label
+        self.progress_percent_label = ttk.Label(progress_frame, text="")
+        self.progress_percent_label.pack(fill=tk.X)
+        
+        # Initially hide progress frame
+        progress_frame.pack_forget()
+        self.progress_frame = progress_frame
+        
         # Bottom frame - actions
         bottom_frame = ttk.Frame(self.root, padding="10")
         bottom_frame.pack(fill=tk.X)
@@ -179,11 +402,12 @@ class MP3AlbumMergerApp:
         self.status_label = ttk.Label(bottom_frame, text="Ready")
         self.status_label.pack(side=tk.LEFT)
         
-        ttk.Button(
+        self.merge_button = ttk.Button(
             bottom_frame, 
             text="Merge Selected", 
             command=self.merge_selected
-        ).pack(side=tk.RIGHT, padx=5)
+        )
+        self.merge_button.pack(side=tk.RIGHT, padx=5)
         
         ttk.Button(
             bottom_frame, 
@@ -414,24 +638,99 @@ class MP3AlbumMergerApp:
         
         # Get output format
         output_format = self._get_selected_format()
-        format_label = FORMAT_REVERSE_LOOKUP.get(output_format, output_format.upper())
+        
+        # Process each group with tag editor
+        groups_to_merge = []
+        
+        for group in selected_groups:
+            files = sort_files(group['files'])
+            
+            # Get merged metadata (including album art)
+            metadata = get_merged_metadata(files)
+            
+            # Show tag editor dialog
+            dialog = TagEditorDialog(
+                self.root,
+                group['name'],
+                metadata,
+                metadata.get('album_art')
+            )
+            self.root.wait_window(dialog)
+            
+            # Check if user cancelled
+            if dialog.result is None:
+                return  # User cancelled, abort all merges
+            
+            groups_to_merge.append({
+                'name': group['name'],
+                'files': files,
+                'metadata': dialog.result
+            })
         
         # Confirm
-        total_files = sum(len(g['files']) for g in selected_groups)
+        total_files = sum(len(g['files']) for g in groups_to_merge)
+        format_label = FORMAT_REVERSE_LOOKUP.get(output_format, output_format.upper())
         result = messagebox.askyesno(
             "Confirm Merge",
-            f"Merge {len(selected_groups)} group(s) with {total_files} files to {format_label}?"
+            f"Merge {len(groups_to_merge)} group(s) with {total_files} files to {format_label}?"
         )
         
         if not result:
             return
         
+        # Show progress bar
+        self._show_progress()
+        
+        # Disable merge button during operation
+        self.merge_button.config(state='disabled')
+        
         # Start merging in thread
-        thread = threading.Thread(target=self.do_merge, args=(selected_groups,))
+        thread = threading.Thread(target=self.do_merge, args=(groups_to_merge,))
         thread.daemon = True
         thread.start()
+        
+        # Start polling progress queue
+        self._poll_progress_queue()
     
-    def do_merge(self, selected_groups):
+    def _show_progress(self):
+        """Show progress bar"""
+        self.progress_frame.pack(fill=tk.X, padx=10, pady=5, before=self.root.winfo_children()[-1])
+        self.progress_bar['value'] = 0
+        self.progress_info_label.config(text="")
+        self.progress_percent_label.config(text="")
+    
+    def _hide_progress(self):
+        """Hide progress bar"""
+        self.progress_frame.pack_forget()
+        self.merge_button.config(state='normal')
+    
+    def _poll_progress_queue(self):
+        """Poll progress queue for updates"""
+        try:
+            while True:
+                msg = self.progress_queue.get_nowait()
+                
+                if msg['type'] == 'info':
+                    self.progress_info_label.config(text=msg['text'])
+                elif msg['type'] == 'progress':
+                    self.progress_bar['value'] = msg['value']
+                    self.progress_percent_label.config(text=msg['text'])
+                elif msg['type'] == 'status':
+                    self.status_label.config(text=msg['text'])
+                elif msg['type'] == 'done':
+                    self._hide_progress()
+                    return
+                elif msg['type'] == 'error':
+                    self._hide_progress()
+                    return
+                    
+        except queue.Empty:
+            pass
+        
+        # Continue polling
+        self.root.after(100, self._poll_progress_queue)
+    
+    def do_merge(self, groups_to_merge):
         """Perform the actual merging"""
         # Get output format and bitrate
         output_format = self._get_selected_format()
@@ -443,9 +742,10 @@ class MP3AlbumMergerApp:
         extension = extensions.get(output_format, '.mp3')
         
         try:
-            for idx, group in enumerate(selected_groups):
+            for idx, group in enumerate(groups_to_merge):
                 group_name = group['name']
-                files = sort_files(group['files'])
+                files = group['files']
+                user_metadata = group['metadata']
                 
                 # Build status message
                 bitrate_info = ""
@@ -455,19 +755,44 @@ class MP3AlbumMergerApp:
                     else:
                         bitrate_info = f" @ {bitrate}"
                 
-                status_msg = f"Merging {idx+1}/{len(selected_groups)}: {group_name} → {format_label}{bitrate_info}"
-                self.status_label.config(text=status_msg)
-                self.root.update()
+                # Update progress info
+                total_tracks = len(files)
+                self.progress_queue.put({
+                    'type': 'info',
+                    'text': f"Processing: {group_name} ({idx+1}/{len(groups_to_merge)})"
+                })
+                self.progress_queue.put({
+                    'type': 'status',
+                    'text': f"Merging {idx+1}/{len(groups_to_merge)}: {group_name} → {format_label}{bitrate_info}"
+                })
                 
                 # Generate output filename with correct extension
                 output_name = sanitize_filename(group_name) + "_merged" + extension
                 output_path = files[0]['path'].parent / output_name
                 
-                # Merge files with selected format and bitrate
-                merge_audio_files(files, output_path, bitrate=bitrate, output_format=output_format)
+                # Define progress callback
+                def progress_callback(percent, status_msg):
+                    self.progress_queue.put({
+                        'type': 'progress',
+                        'value': percent,
+                        'text': f"{status_msg} | Track count: {total_tracks}"
+                    })
                 
-                # Get merged metadata
-                metadata = get_merged_metadata(files)
+                # Merge files with selected format and bitrate
+                merge_audio_files(
+                    files, 
+                    output_path, 
+                    progress_callback=progress_callback,
+                    bitrate=bitrate, 
+                    output_format=output_format
+                )
+                
+                # Prepare metadata for tagging
+                metadata = {
+                    'artist': user_metadata.get('artist'),
+                    'album': user_metadata.get('album'),
+                    'compilation': user_metadata.get('compilation', False)
+                }
                 
                 # Add chapters
                 chapters_data = []
@@ -485,18 +810,48 @@ class MP3AlbumMergerApp:
                     
                     current_time_ms += duration_ms
                 
-                # Add chapters and metadata to output file
-                add_chapters_and_tags(output_path, chapters_data, metadata=metadata, output_format=output_format)
+                # Get album art from user metadata
+                album_art = user_metadata.get('album_art')
                 
-                self.status_label.config(text=f"Completed {idx+1}/{len(selected_groups)}")
-                self.root.update()
+                # Add chapters and metadata to output file
+                add_chapters_and_tags(
+                    output_path, 
+                    chapters_data, 
+                    metadata=metadata, 
+                    output_format=output_format,
+                    album_art=album_art
+                )
+                
+                self.progress_queue.put({
+                    'type': 'progress',
+                    'value': 100,
+                    'text': f"Completed: {group_name}"
+                })
             
-            self.status_label.config(text=f"✓ Successfully merged {len(selected_groups)} group(s) to {format_label}")
-            messagebox.showinfo("Success", f"Successfully merged {len(selected_groups)} group(s) to {format_label}!")
+            self.progress_queue.put({
+                'type': 'status',
+                'text': f"✓ Successfully merged {len(groups_to_merge)} group(s) to {format_label}"
+            })
+            self.progress_queue.put({'type': 'done'})
+            
+            # Show success message in main thread
+            self.root.after(0, lambda: messagebox.showinfo(
+                "Success", 
+                f"Successfully merged {len(groups_to_merge)} group(s) to {format_label}!"
+            ))
             
         except Exception as e:
-            self.status_label.config(text="Error during merge")
-            messagebox.showerror("Error", f"Error during merge:\n{str(e)}")
+            self.progress_queue.put({
+                'type': 'status',
+                'text': "Error during merge"
+            })
+            self.progress_queue.put({'type': 'error'})
+            
+            # Show error message in main thread
+            self.root.after(0, lambda: messagebox.showerror(
+                "Error", 
+                f"Error during merge:\n{str(e)}"
+            ))
     
     def _get_selected_format(self):
         """Get the format value from the selected option."""

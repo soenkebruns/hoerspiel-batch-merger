@@ -2,9 +2,10 @@
 Chapter marker and tag writing module
 """
 
-from mutagen.id3 import ID3, CTOC, CHAP, TIT2, TPE1, TALB, TCMP, CTOCFlags
+import base64
+from mutagen.id3 import ID3, CTOC, CHAP, TIT2, TPE1, TALB, TCMP, CTOCFlags, APIC
 from mutagen.mp3 import MP3
-from mutagen.flac import FLAC
+from mutagen.flac import FLAC, Picture
 from mutagen.oggopus import OggOpus
 
 
@@ -25,7 +26,7 @@ def _ms_to_timestamp(start_ms):
     return f"{hours:02d}:{minutes:02d}:{seconds:02d}.{milliseconds:03d}"
 
 
-def add_chapters_and_tags(audio_path, chapters_data, metadata=None, output_format='mp3'):
+def add_chapters_and_tags(audio_path, chapters_data, metadata=None, output_format='mp3', album_art=None):
     """
     Add chapter markers and tags to audio file based on format
     
@@ -34,18 +35,19 @@ def add_chapters_and_tags(audio_path, chapters_data, metadata=None, output_forma
         chapters_data: List of dicts with: title, start_ms, duration_ms
         metadata: Optional dict with 'artist', 'album', and 'compilation' keys
         output_format: Format of the output file ('mp3', 'flac', 'opus')
+        album_art: Optional dict with 'data' (bytes), 'mime' (str), 'desc' (str)
     """
     if output_format == 'mp3':
-        _add_chapters_to_mp3(audio_path, chapters_data, metadata)
+        _add_chapters_to_mp3(audio_path, chapters_data, metadata, album_art)
     elif output_format == 'flac':
-        _add_tags_to_flac(audio_path, chapters_data, metadata)
+        _add_tags_to_flac(audio_path, chapters_data, metadata, album_art)
     elif output_format == 'opus':
-        _add_tags_to_opus(audio_path, chapters_data, metadata)
+        _add_tags_to_opus(audio_path, chapters_data, metadata, album_art)
     else:
         raise ValueError(f"Unsupported format: {output_format}")
 
 
-def _add_chapters_to_mp3(mp3_path, chapters_data, metadata=None):
+def _add_chapters_to_mp3(mp3_path, chapters_data, metadata=None, album_art=None):
     """
     Add chapter markers to MP3 file using ID3v2 CHAP frames
     
@@ -53,6 +55,7 @@ def _add_chapters_to_mp3(mp3_path, chapters_data, metadata=None):
         mp3_path: Path to MP3 file
         chapters_data: List of dicts with: title, start_ms, duration_ms
         metadata: Optional dict with 'artist', 'album', and 'compilation' keys
+        album_art: Optional dict with 'data' (bytes), 'mime' (str), 'desc' (str)
     """
     try:
         audio = MP3(mp3_path, ID3=ID3)
@@ -109,13 +112,24 @@ def _add_chapters_to_mp3(mp3_path, chapters_data, metadata=None):
             if metadata.get('compilation'):
                 audio.tags.add(TCMP(encoding=3, text='1'))
         
+        # Add album art if provided
+        if album_art and album_art.get('data'):
+            audio.tags.delall('APIC')
+            audio.tags.add(APIC(
+                encoding=3,
+                mime=album_art.get('mime', 'image/jpeg'),
+                type=3,  # Front cover
+                desc=album_art.get('desc', 'Cover'),
+                data=album_art['data']
+            ))
+        
         audio.save()
         
     except Exception as e:
         raise Exception(f"Error adding chapters: {str(e)}")
 
 
-def _add_tags_to_flac(flac_path, chapters_data, metadata=None):
+def _add_tags_to_flac(flac_path, chapters_data, metadata=None, album_art=None):
     """
     Add Vorbis Comments tags to FLAC file
     
@@ -126,6 +140,7 @@ def _add_tags_to_flac(flac_path, chapters_data, metadata=None):
         flac_path: Path to FLAC file
         chapters_data: List of dicts with: title, start_ms, duration_ms
         metadata: Optional dict with 'artist', 'album', and 'compilation' keys
+        album_art: Optional dict with 'data' (bytes), 'mime' (str), 'desc' (str)
     """
     try:
         audio = FLAC(flac_path)
@@ -147,13 +162,25 @@ def _add_tags_to_flac(flac_path, chapters_data, metadata=None):
             audio[f'CHAPTER{chapter_num}'] = timestamp
             audio[f'CHAPTER{chapter_num}NAME'] = chapter['title']
         
+        # Add album art if provided
+        if album_art and album_art.get('data'):
+            # Clear existing pictures
+            audio.clear_pictures()
+            
+            picture = Picture()
+            picture.type = 3  # Front cover
+            picture.mime = album_art.get('mime', 'image/jpeg')
+            picture.desc = album_art.get('desc', 'Cover')
+            picture.data = album_art['data']
+            audio.add_picture(picture)
+        
         audio.save()
         
     except Exception as e:
         raise Exception(f"Error adding tags to FLAC: {str(e)}")
 
 
-def _add_tags_to_opus(opus_path, chapters_data, metadata=None):
+def _add_tags_to_opus(opus_path, chapters_data, metadata=None, album_art=None):
     """
     Add Vorbis Comments tags to Opus file
     
@@ -163,6 +190,7 @@ def _add_tags_to_opus(opus_path, chapters_data, metadata=None):
         opus_path: Path to Opus file
         chapters_data: List of dicts with: title, start_ms, duration_ms
         metadata: Optional dict with 'artist', 'album', and 'compilation' keys
+        album_art: Optional dict with 'data' (bytes), 'mime' (str), 'desc' (str)
     """
     try:
         audio = OggOpus(opus_path)
@@ -183,6 +211,19 @@ def _add_tags_to_opus(opus_path, chapters_data, metadata=None):
             timestamp = _ms_to_timestamp(chapter['start_ms'])
             audio[f'CHAPTER{chapter_num}'] = timestamp
             audio[f'CHAPTER{chapter_num}NAME'] = chapter['title']
+        
+        # Add album art if provided
+        if album_art and album_art.get('data'):
+            # Opus stores pictures as base64-encoded METADATA_BLOCK_PICTURE
+            picture = Picture()
+            picture.type = 3  # Front cover
+            picture.mime = album_art.get('mime', 'image/jpeg')
+            picture.desc = album_art.get('desc', 'Cover')
+            picture.data = album_art['data']
+            
+            # Encode picture as base64 for Opus
+            picture_data = base64.b64encode(picture.write()).decode('ascii')
+            audio['METADATA_BLOCK_PICTURE'] = [picture_data]
         
         audio.save()
         

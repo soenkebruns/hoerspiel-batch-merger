@@ -8,6 +8,7 @@ from mutagen.id3 import ID3
 from mutagen.flac import FLAC
 from mutagen.oggopus import OggOpus
 import re
+import base64
 
 # Supported audio file extensions
 SUPPORTED_EXTENSIONS = ['*.mp3', '*.flac', '*.opus']
@@ -202,3 +203,117 @@ def sort_files(files):
         return (1, 0, file_info['path'].name.lower())
     
     return sorted(files, key=sort_key)
+
+
+def extract_album_art(file_path):
+    """
+    Extract album art from audio file (MP3, FLAC, or Opus)
+    
+    Args:
+        file_path: Path to audio file
+        
+    Returns:
+        dict with 'data' (bytes), 'mime' (str), and 'desc' (str)
+        or None if no album art found
+    """
+    file_path = Path(file_path)
+    suffix = file_path.suffix.lower()
+    
+    try:
+        if suffix == '.mp3':
+            return _extract_mp3_album_art(file_path)
+        elif suffix == '.flac':
+            return _extract_flac_album_art(file_path)
+        elif suffix == '.opus':
+            return _extract_opus_album_art(file_path)
+        else:
+            return None
+    except Exception as e:
+        print(f"Error extracting album art from {file_path}: {e}")
+        return None
+
+
+def _extract_mp3_album_art(file_path):
+    """Extract album art from MP3 file using APIC frames"""
+    try:
+        id3 = ID3(file_path)
+        
+        # Look for APIC (Attached Picture) frames
+        for key in id3.keys():
+            if key.startswith('APIC'):
+                apic = id3[key]
+                return {
+                    'data': apic.data,
+                    'mime': apic.mime,
+                    'desc': apic.desc or 'Cover'
+                }
+        return None
+    except Exception:
+        return None
+
+
+def _extract_flac_album_art(file_path):
+    """Extract album art from FLAC file using pictures attribute"""
+    try:
+        audio = FLAC(file_path)
+        pictures = audio.pictures
+        
+        if pictures:
+            # Prefer front cover (type 3), otherwise use first picture
+            for pic in pictures:
+                if pic.type == 3:  # Front cover
+                    return {
+                        'data': pic.data,
+                        'mime': pic.mime,
+                        'desc': pic.desc or 'Front cover'
+                    }
+            # Fall back to first picture
+            pic = pictures[0]
+            return {
+                'data': pic.data,
+                'mime': pic.mime,
+                'desc': pic.desc or 'Cover'
+            }
+        return None
+    except Exception:
+        return None
+
+
+def _extract_opus_album_art(file_path):
+    """Extract album art from Opus file using METADATA_BLOCK_PICTURE"""
+    try:
+        from mutagen.flac import Picture
+        
+        audio = OggOpus(file_path)
+        
+        # Opus stores pictures as base64-encoded METADATA_BLOCK_PICTURE
+        pictures_data = audio.get('METADATA_BLOCK_PICTURE', [])
+        
+        for pic_data in pictures_data:
+            try:
+                # Decode base64 and parse as FLAC Picture
+                picture = Picture(base64.b64decode(pic_data))
+                if picture.type == 3:  # Front cover
+                    return {
+                        'data': picture.data,
+                        'mime': picture.mime,
+                        'desc': picture.desc or 'Front cover'
+                    }
+            except Exception:
+                continue
+        
+        # Fall back to first picture if no front cover
+        for pic_data in pictures_data:
+            try:
+                picture = Picture(base64.b64decode(pic_data))
+                return {
+                    'data': picture.data,
+                    'mime': picture.mime,
+                    'desc': picture.desc or 'Cover'
+                }
+            except Exception:
+                continue
+        
+        return None
+    except Exception:
+        return None

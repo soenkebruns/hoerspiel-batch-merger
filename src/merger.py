@@ -6,6 +6,9 @@ import subprocess
 import shutil
 from pathlib import Path
 import tempfile
+import re
+
+from .scanner import extract_album_art
 
 # Format configuration: codec, extension, and whether it needs re-encoding
 FORMAT_CONFIG = {
@@ -39,7 +42,7 @@ def merge_audio_files(file_list, output_path, progress_callback=None, bitrate=No
     Args:
         file_list: List of file_info dicts
         output_path: Path for output file
-        progress_callback: Optional callback function(percent)
+        progress_callback: Optional callback function(percent, status_msg)
         bitrate: Optional target bitrate (e.g., '128k', '192k'). For FLAC, this is compression level (0-8).
         output_format: Output format ('mp3', 'flac', 'opus'). Default is 'mp3'.
     """
@@ -50,6 +53,9 @@ def merge_audio_files(file_list, output_path, progress_callback=None, bitrate=No
         raise ValueError(f"Unsupported output format: {output_format}")
     
     config = FORMAT_CONFIG[output_format]
+    
+    # Calculate total duration for progress tracking
+    total_duration = sum(f.get('duration', 0) for f in file_list)
     
     # Check if all input files are the same format as output
     all_same_format = all(
@@ -104,21 +110,58 @@ def merge_audio_files(file_list, output_path, progress_callback=None, bitrate=No
                 else:
                     cmd.extend(['-b:a', '128k'])  # Default bitrate for Opus
         
+        # Add progress output option if callback is provided
+        if progress_callback and total_duration > 0:
+            cmd.extend(['-progress', 'pipe:1', '-nostats'])
+        
         cmd.extend(['-y', str(output_path)])  # Overwrite output file
         
-        # Execute ffmpeg
-        process = subprocess.run(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True
-        )
-        
-        if process.returncode != 0:
-            raise Exception(f"FFmpeg error: {process.stderr}")
+        # Execute ffmpeg with progress tracking if callback provided
+        if progress_callback and total_duration > 0:
+            process = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True
+            )
+            
+            # Parse progress output
+            current_time_us = 0
+            for line in process.stdout:
+                line = line.strip()
+                if line.startswith('out_time_us='):
+                    try:
+                        current_time_us = int(line.split('=')[1])
+                        current_seconds = current_time_us / 1_000_000
+                        percent = min(100, (current_seconds / total_duration) * 100)
+                        bitrate_info = bitrate if bitrate else 'default'
+                        status_msg = f"Encoding: {percent:.0f}% @ {bitrate_info}"
+                        progress_callback(percent, status_msg)
+                    except (ValueError, IndexError):
+                        pass
+                elif line == 'progress=end':
+                    progress_callback(100, "Encoding complete")
+            
+            # Read any remaining stderr output
+            stderr = process.stderr.read()
+            process.wait()
+            
+            if process.returncode != 0:
+                raise Exception(f"FFmpeg error: {stderr}")
+        else:
+            # Standard execution without progress
+            process = subprocess.run(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True
+            )
+            
+            if process.returncode != 0:
+                raise Exception(f"FFmpeg error: {process.stderr}")
         
         if progress_callback:
-            progress_callback(100)
+            progress_callback(100, "Complete")
             
     finally:
         # Clean up temp file
@@ -141,7 +184,7 @@ def get_merged_metadata(file_list):
         file_list: List of file_info dicts with 'artist' and 'album' keys
         
     Returns:
-        dict with 'artist', 'album', and 'compilation' keys
+        dict with 'artist', 'album', 'compilation', and 'album_art' keys
         
     Logic:
         - Artist: If all files have the same artist, use that artist.
@@ -151,9 +194,10 @@ def get_merged_metadata(file_list):
           If files have different albums, use 'Compilation'.
           If no album tags exist, use 'Unknown Album'.
         - compilation: True when multiple different artists are detected, False otherwise.
+        - album_art: Extracted from first file with album art (if any).
     """
     if not file_list:
-        return {'artist': 'Unknown Artist', 'album': 'Unknown Album', 'compilation': False}
+        return {'artist': 'Unknown Artist', 'album': 'Unknown Album', 'compilation': False, 'album_art': None}
     
     # Collect unique artists and albums (excluding None values)
     artists = set()
@@ -186,8 +230,17 @@ def get_merged_metadata(file_list):
     else:
         result_album = 'Compilation'
     
+    # Extract album art from first file that has it
+    album_art = None
+    for file_info in file_list:
+        art = extract_album_art(file_info['path'])
+        if art:
+            album_art = art
+            break
+    
     return {
         'artist': result_artist,
         'album': result_album,
-        'compilation': compilation
+        'compilation': compilation,
+        'album_art': album_art
     }
