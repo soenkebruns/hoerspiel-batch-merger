@@ -11,6 +11,9 @@ A desktop application for merging MP3 files (especially audiobooks and Hörspiel
 - ⚡ **Fast Merging** - Uses FFmpeg for quick, lossless merging
 - 🎯 **Chapter Markers** - Automatically adds ID3 chapter markers (CHAP frames)
 - 💾 **Clean Output** - Creates `Artist-AlbumName_merged.mp3` files
+- 📊 **Real-time Progress Bar** - Shows encoding progress during merge operations
+- 🏷️ **Tag Editor Dialog** - Edit metadata (Artist, Album, Year, Genre, etc.) before merging
+- 🎨 **Album Art Support** - Automatically extracts, displays, and embeds album art
 
 ## Installation
 
@@ -75,7 +78,19 @@ python main.py
 
 6. **Merge** - Click "Merge Selected Albums" to start
 
-7. **Output** - Merged files are saved in the same folder as source files with the format:
+7. **Edit Tags** - A Tag Editor dialog appears with:
+   - Auto-detected Artist, Album, Year, Genre
+   - Editable fields for all metadata
+   - Album art preview (extracted from source files)
+   - Options to change or remove album art
+   - Click "Start Merge" to proceed or "Cancel" to abort
+
+8. **Watch Progress** - A real-time progress bar shows:
+   - Current group being processed
+   - Encoding percentage
+   - Track count information
+
+9. **Output** - Merged files are saved in the same folder as source files with the format:
    ```
    Artist-AlbumName_merged.mp3
    ```
@@ -135,6 +150,7 @@ hoerspiel-batch-merger/
 
 ### Dependencies
 - **mutagen** - ID3 tag reading/writing and chapter markers
+- **Pillow** - Album art display in Tag Editor dialog
 - **tkinter** - GUI (included with Python)
 - **FFmpeg** - External tool for MP3 merging
 
