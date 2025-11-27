@@ -142,8 +142,9 @@ def merge_audio_files(file_list, output_path, progress_callback=None, bitrate=No
                 elif line == 'progress=end':
                     progress_callback(100, "Encoding complete")
             
+            # Read any remaining stderr output
+            stderr = process.stderr.read()
             process.wait()
-            _, stderr = process.communicate()
             
             if process.returncode != 0:
                 raise Exception(f"FFmpeg error: {stderr}")

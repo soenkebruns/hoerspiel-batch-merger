@@ -213,10 +213,14 @@ class TagEditorDialog(tk.Toplevel):
                 with open(file_path, 'rb') as f:
                     data = f.read()
                 
-                # Determine mime type
-                mime = 'image/jpeg'
-                if file_path.lower().endswith('.png'):
+                # Determine mime type from file signature (magic bytes)
+                mime = 'image/jpeg'  # Default
+                if data[:8] == b'\x89PNG\r\n\x1a\n':
                     mime = 'image/png'
+                elif data[:2] in (b'\xff\xd8', b'\xff\xe0', b'\xff\xe1'):
+                    mime = 'image/jpeg'
+                elif data[:4] == b'GIF8':
+                    mime = 'image/gif'
                 
                 self.album_art = {
                     'data': data,
