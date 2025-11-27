@@ -181,7 +181,7 @@ class MP3AlbumMergerApp:
         
         ttk.Button(
             bottom_frame, 
-            text="Merge Selected Albums", 
+            text="Merge Selected", 
             command=self.merge_selected
         ).pack(side=tk.RIGHT, padx=5)
         
@@ -420,7 +420,7 @@ class MP3AlbumMergerApp:
         total_files = sum(len(g['files']) for g in selected_groups)
         result = messagebox.askyesno(
             "Confirm Merge",
-            f"Merge {len(selected_groups)} album(s) with {total_files} files to {format_label}?"
+            f"Merge {len(selected_groups)} group(s) with {total_files} files to {format_label}?"
         )
         
         if not result:
@@ -491,8 +491,8 @@ class MP3AlbumMergerApp:
                 self.status_label.config(text=f"Completed {idx+1}/{len(selected_groups)}")
                 self.root.update()
             
-            self.status_label.config(text=f"✓ Successfully merged {len(selected_groups)} album(s) to {format_label}")
-            messagebox.showinfo("Success", f"Successfully merged {len(selected_groups)} album(s) to {format_label}!")
+            self.status_label.config(text=f"✓ Successfully merged {len(selected_groups)} group(s) to {format_label}")
+            messagebox.showinfo("Success", f"Successfully merged {len(selected_groups)} group(s) to {format_label}!")
             
         except Exception as e:
             self.status_label.config(text="Error during merge")
