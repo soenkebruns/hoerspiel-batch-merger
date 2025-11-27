@@ -181,7 +181,7 @@ class MP3AlbumMergerApp:
         
         ttk.Button(
             bottom_frame, 
-            text="Merge Selected Albums", 
+            text="Merge Selected", 
             command=self.merge_selected
         ).pack(side=tk.RIGHT, padx=5)
         
@@ -383,16 +383,12 @@ class MP3AlbumMergerApp:
             self.check_item_recursive(child, checked)
     
     def merge_selected(self):
-        """Merge selected albums"""
-        # Get selected groups
+        """Merge selected tracks"""
+        # Get selected groups - now allows individual track selection regardless of album checkbox
         selected_groups = []
         
         for group_item in self.tree.get_children():
-            tags = self.tree.item(group_item, "tags")
-            if "checked" not in tags:
-                continue
-            
-            # Get group name
+            # Get group name (works whether album checkbox is checked or not)
             group_name = self.tree.item(group_item, "text").replace("☑ ", "").replace("☐ ", "")
             
             # Get checked files in this group
@@ -413,7 +409,7 @@ class MP3AlbumMergerApp:
                 })
         
         if not selected_groups:
-            messagebox.showinfo("No Selection", "Please select at least one album to merge.")
+            messagebox.showinfo("No Selection", "Please select at least one track to merge.")
             return
         
         # Get output format
@@ -424,7 +420,7 @@ class MP3AlbumMergerApp:
         total_files = sum(len(g['files']) for g in selected_groups)
         result = messagebox.askyesno(
             "Confirm Merge",
-            f"Merge {len(selected_groups)} album(s) with {total_files} files to {format_label}?"
+            f"Merge {len(selected_groups)} group(s) with {total_files} files to {format_label}?"
         )
         
         if not result:
@@ -495,8 +491,8 @@ class MP3AlbumMergerApp:
                 self.status_label.config(text=f"Completed {idx+1}/{len(selected_groups)}")
                 self.root.update()
             
-            self.status_label.config(text=f"✓ Successfully merged {len(selected_groups)} album(s) to {format_label}")
-            messagebox.showinfo("Success", f"Successfully merged {len(selected_groups)} album(s) to {format_label}!")
+            self.status_label.config(text=f"✓ Successfully merged {len(selected_groups)} group(s) to {format_label}")
+            messagebox.showinfo("Success", f"Successfully merged {len(selected_groups)} group(s) to {format_label}!")
             
         except Exception as e:
             self.status_label.config(text="Error during merge")
