@@ -1,5 +1,5 @@
 """
-Tkinter GUI for MP3 Album Merger
+Tkinter GUI for Audio Album Merger
 """
 
 import tkinter as tk
@@ -8,45 +8,75 @@ from pathlib import Path
 import threading
 
 from .scanner import scan_folder, group_by_album, group_by_folder, sort_files
-from .merger import check_ffmpeg, merge_mp3_files, get_merged_metadata
-from .chapters import add_chapters_to_mp3
+from .merger import check_ffmpeg, merge_audio_files, get_merged_metadata
+from .chapters import add_chapters_and_tags
 from .utils import format_duration, sanitize_filename
 
 
-# Bitrate options for the dropdown
-BITRATE_OPTIONS = [
-    ("Original (no re-encoding)", None),
-    ("64 kbps", "64k"),
-    ("128 kbps", "128k"),
-    ("192 kbps", "192k"),
-    ("256 kbps", "256k"),
-    ("320 kbps", "320k"),
+# Output format options
+FORMAT_OPTIONS = [
+    ("MP3", "mp3"),
+    ("FLAC", "flac"),
+    ("Opus", "opus"),
 ]
 
-# Lookup dictionary for bitrate values
-BITRATE_LOOKUP = {label: value for label, value in BITRATE_OPTIONS}
+# Bitrate options for each format
+BITRATE_OPTIONS = {
+    'mp3': [
+        ("Original (no re-encoding)", None),
+        ("64 kbps", "64k"),
+        ("128 kbps", "128k"),
+        ("192 kbps", "192k"),
+        ("256 kbps", "256k"),
+        ("320 kbps", "320k"),
+    ],
+    'flac': [
+        ("Compression 0 (fastest)", "0"),
+        ("Compression 1", "1"),
+        ("Compression 2", "2"),
+        ("Compression 3", "3"),
+        ("Compression 4", "4"),
+        ("Compression 5 (default)", "5"),
+        ("Compression 6", "6"),
+        ("Compression 7", "7"),
+        ("Compression 8 (best)", "8"),
+    ],
+    'opus': [
+        ("64 kbps", "64k"),
+        ("96 kbps", "96k"),
+        ("128 kbps (default)", "128k"),
+        ("192 kbps", "192k"),
+        ("256 kbps", "256k"),
+    ],
+}
+
+# Lookup dictionaries for format and bitrate values
+FORMAT_LOOKUP = {label: value for label, value in FORMAT_OPTIONS}
+FORMAT_REVERSE_LOOKUP = {value: label for label, value in FORMAT_OPTIONS}
 
 
 class MP3AlbumMergerApp:
     def __init__(self):
         self.root = tk.Tk()
-        self.root.title("MP3 Album Merger")
+        self.root.title("Audio Album Merger")
         self.root.geometry("900x700")
         
         self.selected_folder = None
         self.all_files = []
         self.groups = {}
         self.grouping_mode = tk.StringVar(value="album")
-        self.selected_bitrate = tk.StringVar(value=BITRATE_OPTIONS[0][0])
+        self.selected_format = tk.StringVar(value=FORMAT_OPTIONS[0][0])
+        self.selected_bitrate = tk.StringVar()
         
         self.setup_ui()
+        self._update_bitrate_options()  # Initialize bitrate options
         
         # Check ffmpeg on startup
         if not check_ffmpeg():
             messagebox.showwarning(
                 "FFmpeg Not Found",
                 "FFmpeg is not installed or not in PATH.\n"
-                "Please install FFmpeg to merge MP3 files.\n\n"
+                "Please install FFmpeg to merge audio files.\n\n"
                 "Visit: https://ffmpeg.org/download.html"
             )
     
@@ -82,19 +112,34 @@ class MP3AlbumMergerApp:
             command=self.regroup_files
         ).pack(side=tk.LEFT, padx=5)
         
+        # Output settings frame
+        output_frame = ttk.LabelFrame(self.root, text="Output Settings", padding="10")
+        output_frame.pack(fill=tk.X, padx=10, pady=5)
+        
+        # Format selection
+        ttk.Label(output_frame, text="Format:").pack(side=tk.LEFT, padx=5)
+        self.format_combo = ttk.Combobox(
+            output_frame,
+            textvariable=self.selected_format,
+            values=[opt[0] for opt in FORMAT_OPTIONS],
+            state="readonly",
+            width=10
+        )
+        self.format_combo.pack(side=tk.LEFT, padx=5)
+        self.format_combo.bind('<<ComboboxSelected>>', self._on_format_change)
+        
         # Separator
-        ttk.Separator(mode_frame, orient=tk.VERTICAL).pack(side=tk.LEFT, padx=15, fill=tk.Y)
+        ttk.Separator(output_frame, orient=tk.VERTICAL).pack(side=tk.LEFT, padx=15, fill=tk.Y)
         
         # Bitrate selection
-        ttk.Label(mode_frame, text="Bitrate:").pack(side=tk.LEFT, padx=5)
-        bitrate_combo = ttk.Combobox(
-            mode_frame,
+        ttk.Label(output_frame, text="Quality:").pack(side=tk.LEFT, padx=5)
+        self.bitrate_combo = ttk.Combobox(
+            output_frame,
             textvariable=self.selected_bitrate,
-            values=[opt[0] for opt in BITRATE_OPTIONS],
             state="readonly",
             width=25
         )
-        bitrate_combo.pack(side=tk.LEFT, padx=5)
+        self.bitrate_combo.pack(side=tk.LEFT, padx=5)
         
         # Main treeview
         tree_frame = ttk.Frame(self.root, padding="10")
@@ -152,6 +197,25 @@ class MP3AlbumMergerApp:
             command=self.deselect_all
         ).pack(side=tk.RIGHT, padx=5)
     
+    def _on_format_change(self, event=None):
+        """Handle format selection change"""
+        self._update_bitrate_options()
+    
+    def _update_bitrate_options(self):
+        """Update bitrate dropdown options based on selected format"""
+        output_format = self._get_selected_format()
+        options = BITRATE_OPTIONS.get(output_format, BITRATE_OPTIONS['mp3'])
+        
+        self.bitrate_combo['values'] = [opt[0] for opt in options]
+        
+        # Select default option
+        if output_format == 'mp3':
+            self.selected_bitrate.set(options[0][0])  # Original (no re-encoding)
+        elif output_format == 'flac':
+            self.selected_bitrate.set(options[5][0])  # Compression 5 (default)
+        elif output_format == 'opus':
+            self.selected_bitrate.set(options[2][0])  # 128 kbps (default)
+    
     def select_folder(self):
         """Open folder selection dialog"""
         folder = filedialog.askdirectory()
@@ -161,7 +225,7 @@ class MP3AlbumMergerApp:
             self.scan_folder()
     
     def scan_folder(self):
-        """Scan folder for MP3 files"""
+        """Scan folder for audio files"""
         if not self.selected_folder:
             return
         
@@ -172,7 +236,7 @@ class MP3AlbumMergerApp:
             self.all_files = scan_folder(self.selected_folder)
             
             if not self.all_files:
-                messagebox.showinfo("No Files", "No MP3 files found in the selected folder.")
+                messagebox.showinfo("No Files", "No audio files found in the selected folder.\n(Supported: MP3, FLAC, Opus)")
                 self.status_label.config(text="No files found")
                 return
             
@@ -352,11 +416,15 @@ class MP3AlbumMergerApp:
             messagebox.showinfo("No Selection", "Please select at least one album to merge.")
             return
         
+        # Get output format
+        output_format = self._get_selected_format()
+        format_label = FORMAT_REVERSE_LOOKUP.get(output_format, output_format.upper())
+        
         # Confirm
         total_files = sum(len(g['files']) for g in selected_groups)
         result = messagebox.askyesno(
             "Confirm Merge",
-            f"Merge {len(selected_groups)} album(s) with {total_files} files?"
+            f"Merge {len(selected_groups)} album(s) with {total_files} files to {format_label}?"
         )
         
         if not result:
@@ -369,23 +437,38 @@ class MP3AlbumMergerApp:
     
     def do_merge(self, selected_groups):
         """Perform the actual merging"""
-        # Get bitrate value from selection
+        # Get output format and bitrate
+        output_format = self._get_selected_format()
         bitrate = self._get_selected_bitrate()
+        format_label = FORMAT_REVERSE_LOOKUP.get(output_format, output_format.upper())
+        
+        # Get file extension for output
+        extensions = {'mp3': '.mp3', 'flac': '.flac', 'opus': '.opus'}
+        extension = extensions.get(output_format, '.mp3')
         
         try:
             for idx, group in enumerate(selected_groups):
                 group_name = group['name']
                 files = sort_files(group['files'])
                 
-                self.status_label.config(text=f"Merging {idx+1}/{len(selected_groups)}: {group_name}")
+                # Build status message
+                bitrate_info = ""
+                if bitrate:
+                    if output_format == 'flac':
+                        bitrate_info = f" (compression {bitrate})"
+                    else:
+                        bitrate_info = f" @ {bitrate}"
+                
+                status_msg = f"Merging {idx+1}/{len(selected_groups)}: {group_name} → {format_label}{bitrate_info}"
+                self.status_label.config(text=status_msg)
                 self.root.update()
                 
-                # Generate output filename
-                output_name = sanitize_filename(group_name) + "_merged.mp3"
+                # Generate output filename with correct extension
+                output_name = sanitize_filename(group_name) + "_merged" + extension
                 output_path = files[0]['path'].parent / output_name
                 
-                # Merge files with selected bitrate
-                merge_mp3_files(files, output_path, bitrate=bitrate)
+                # Merge files with selected format and bitrate
+                merge_audio_files(files, output_path, bitrate=bitrate, output_format=output_format)
                 
                 # Get merged metadata
                 metadata = get_merged_metadata(files)
@@ -407,22 +490,33 @@ class MP3AlbumMergerApp:
                     current_time_ms += duration_ms
                 
                 # Add chapters and metadata to output file
-                add_chapters_to_mp3(output_path, chapters_data, metadata=metadata)
+                add_chapters_and_tags(output_path, chapters_data, metadata=metadata, output_format=output_format)
                 
                 self.status_label.config(text=f"Completed {idx+1}/{len(selected_groups)}")
                 self.root.update()
             
-            self.status_label.config(text=f"✓ Successfully merged {len(selected_groups)} album(s)")
-            messagebox.showinfo("Success", f"Successfully merged {len(selected_groups)} album(s)!")
+            self.status_label.config(text=f"✓ Successfully merged {len(selected_groups)} album(s) to {format_label}")
+            messagebox.showinfo("Success", f"Successfully merged {len(selected_groups)} album(s) to {format_label}!")
             
         except Exception as e:
             self.status_label.config(text="Error during merge")
             messagebox.showerror("Error", f"Error during merge:\n{str(e)}")
     
+    def _get_selected_format(self):
+        """Get the format value from the selected option."""
+        selected_label = self.selected_format.get()
+        return FORMAT_LOOKUP.get(selected_label, 'mp3')
+    
     def _get_selected_bitrate(self):
         """Get the bitrate value from the selected option."""
+        output_format = self._get_selected_format()
+        options = BITRATE_OPTIONS.get(output_format, BITRATE_OPTIONS['mp3'])
         selected_label = self.selected_bitrate.get()
-        return BITRATE_LOOKUP.get(selected_label)
+        
+        for label, value in options:
+            if label == selected_label:
+                return value
+        return None
     
     def run(self):
         """Start the application"""
