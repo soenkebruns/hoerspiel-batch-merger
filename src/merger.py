@@ -27,8 +27,8 @@ def merge_mp3_files(file_list, output_path, progress_callback=None):
     with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False, encoding='utf-8') as f:
         concat_file = Path(f.name)
         for file_info in file_list:
-            # Escape single quotes and backslashes for ffmpeg
-            file_path = str(file_info['path']).replace("'", "'\\'\'')
+            # Escape single quotes for ffmpeg
+            file_path = str(file_info['path']).replace("'", r"'\''")
             f.write(f"file '{file_path}'\n")
     
     try:
