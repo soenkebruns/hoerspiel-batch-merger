@@ -8,6 +8,23 @@ from mutagen.flac import FLAC
 from mutagen.oggopus import OggOpus
 
 
+def _ms_to_timestamp(start_ms):
+    """
+    Convert milliseconds to timestamp format HH:MM:SS.mmm
+    
+    Args:
+        start_ms: Time in milliseconds
+        
+    Returns:
+        Formatted timestamp string
+    """
+    hours = start_ms // 3600000
+    minutes = (start_ms % 3600000) // 60000
+    seconds = (start_ms % 60000) // 1000
+    milliseconds = start_ms % 1000
+    return f"{hours:02d}:{minutes:02d}:{seconds:02d}.{milliseconds:03d}"
+
+
 def add_chapters_and_tags(audio_path, chapters_data, metadata=None, output_format='mp3'):
     """
     Add chapter markers and tags to audio file based on format
@@ -126,15 +143,7 @@ def _add_tags_to_flac(flac_path, chapters_data, metadata=None):
         # Format: CHAPTER001=00:00:00.000, CHAPTER001NAME=Title
         for idx, chapter in enumerate(chapters_data):
             chapter_num = f"{idx + 1:03d}"
-            start_ms = chapter['start_ms']
-            
-            # Convert to timestamp format HH:MM:SS.mmm
-            hours = start_ms // 3600000
-            minutes = (start_ms % 3600000) // 60000
-            seconds = (start_ms % 60000) // 1000
-            milliseconds = start_ms % 1000
-            
-            timestamp = f"{hours:02d}:{minutes:02d}:{seconds:02d}.{milliseconds:03d}"
+            timestamp = _ms_to_timestamp(chapter['start_ms'])
             audio[f'CHAPTER{chapter_num}'] = timestamp
             audio[f'CHAPTER{chapter_num}NAME'] = chapter['title']
         
@@ -171,15 +180,7 @@ def _add_tags_to_opus(opus_path, chapters_data, metadata=None):
         # Format: CHAPTER001=00:00:00.000, CHAPTER001NAME=Title
         for idx, chapter in enumerate(chapters_data):
             chapter_num = f"{idx + 1:03d}"
-            start_ms = chapter['start_ms']
-            
-            # Convert to timestamp format HH:MM:SS.mmm
-            hours = start_ms // 3600000
-            minutes = (start_ms % 3600000) // 60000
-            seconds = (start_ms % 60000) // 1000
-            milliseconds = start_ms % 1000
-            
-            timestamp = f"{hours:02d}:{minutes:02d}:{seconds:02d}.{milliseconds:03d}"
+            timestamp = _ms_to_timestamp(chapter['start_ms'])
             audio[f'CHAPTER{chapter_num}'] = timestamp
             audio[f'CHAPTER{chapter_num}NAME'] = chapter['title']
         

@@ -74,11 +74,11 @@ def merge_audio_files(file_list, output_path, progress_callback=None, bitrate=No
         ]
         
         # Determine codec options based on output format
+        # Only MP3 supports copy mode (when same format and no bitrate change)
         use_copy = (
             all_same_format and 
             config['supports_copy'] and 
-            bitrate is None and 
-            output_format == 'mp3'
+            bitrate is None
         )
         
         if use_copy:
