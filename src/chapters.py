@@ -65,9 +65,9 @@ def add_chapters_to_mp3(mp3_path, chapters_data, metadata=None):
                 audio.tags.delall('TALB')
                 audio.tags.add(TALB(encoding=3, text=metadata['album']))
             
-            # Compilation flag
+            # Compilation flag - explicitly set or clear
+            audio.tags.delall('TCMP')
             if metadata.get('compilation'):
-                audio.tags.delall('TCMP')
                 audio.tags.add(TCMP(encoding=3, text='1'))
         
         audio.save()

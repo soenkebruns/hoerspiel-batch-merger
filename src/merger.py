@@ -77,6 +77,15 @@ def get_merged_metadata(file_list):
         
     Returns:
         dict with 'artist', 'album', and 'compilation' keys
+        
+    Logic:
+        - Artist: If all files have the same artist, use that artist.
+          If files have different artists, use 'Various Artists' and set compilation=True.
+          If no artist tags exist, use 'Unknown Artist'.
+        - Album: If all files have the same album, use that album.
+          If files have different albums, use 'Compilation'.
+          If no album tags exist, use 'Unknown Album'.
+        - compilation: True when multiple different artists are detected, False otherwise.
     """
     if not file_list:
         return {'artist': 'Unknown Artist', 'album': 'Unknown Album', 'compilation': False}

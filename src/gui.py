@@ -23,6 +23,9 @@ BITRATE_OPTIONS = [
     ("320 kbps", "320k"),
 ]
 
+# Lookup dictionary for bitrate values
+BITRATE_LOOKUP = {label: value for label, value in BITRATE_OPTIONS}
+
 
 class MP3AlbumMergerApp:
     def __init__(self):
@@ -419,10 +422,7 @@ class MP3AlbumMergerApp:
     def _get_selected_bitrate(self):
         """Get the bitrate value from the selected option."""
         selected_label = self.selected_bitrate.get()
-        for label, value in BITRATE_OPTIONS:
-            if label == selected_label:
-                return value
-        return None
+        return BITRATE_LOOKUP.get(selected_label)
     
     def run(self):
         """Start the application"""
